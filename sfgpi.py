@@ -1,99 +1,118 @@
-# This code is largely copied from
-# https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
-
 import numpy as np
 import random
 from collections import namedtuple, deque
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-
-# online learning of a task-conditioned value function
-# implemented as a neural network: Task x State -> Policy
-
-class SFNet(nn.Module):
-
-    def __init__(self, input_size, output_size):
-        super(SFNet, self).__init__()
-
-        self.linearLayers = nn.Sequential(
-            nn.Linear(input_size, 50),
-            nn.ReLU(nn.Linear(50, 50)),
-            nn.Linear(50, 25),
-            nn.Linear(25, output_size),
-        )
-
-    def forward(self, x):
-        return self.linearLayers(x)
-
-#############################################################
-# SFGPI predicts Successor Features,
-# i.e. only learns which features follow next given a policy
-#############################################################
-
+# online learning of SFGPI
 class SFGPI():
-
-    def __init__(self, input_size, output_size, n_actions, n_features,
-                 LEARNING_RATE, GAMMA, BUFFER_CAPACITY, BATCH_SIZE, TARGET_UPDATE):
-
-        # target net makes predictions, policy net is updated with TD error
-        # and after a while parameters are copied from policy to target net
-        self.policy_net = SFNet(input_size, output_size)
-        self.target_net = SFNet(input_size, output_size)
-
+    def __init__(self, n_states, n_actions, n_features,
+                 LEARNING_RATE, GAMMA, BUFFER_CAPACITY, BATCH_SIZE):
+        self.n_states   = n_states
         self.n_actions  = n_actions
         self.n_features = n_features
 
         self.LEARNING_RATE = LEARNING_RATE
         self.GAMMA = GAMMA
+        self.BUFFER_CAPACITY = BUFFER_CAPACITY
         self.BATCH_SIZE = BATCH_SIZE
-        self.TARGET_UPDATE = TARGET_UPDATE
 
-        self.replay_buffer = ReplayMemory(BUFFER_CAPACITY)
-        self.optimizer = optim.RMSprop(self.policy_net.parameters())
+        self.tasks = [] # list of all encountered task vectors
 
-    def predict(self, state):
-        with torch.no_grad():
-            psi = self.policy_net(state)
-        psi = psi.detach().numpy().astype(np.float64)
-        return np.reshape(psi, (self.n_actions, self.n_features))
+        # for each task we learn separate SFs and seperate policies
+        # each sf object is of size n_states x n_actions x n_features
+        self.sf_by_task = []
+        # each policy is of size n_states x n_actions
+        self.pi_by_task = []
+        # also store experiences by task
+        self.replay_buffer_by_task = [] # one buffer for each task
 
-    def train(self, step):
-        if len(self.replay_buffer) < self.BATCH_SIZE:
+    def predict_Q(self, state, task):
+        # if task not known yet...
+        known_task = task in self.tasks
+        # known_task = self.tasks != [] and np.any(np.all(task == self.tasks, axis=1)) # XXX for numpy arrays
+
+        if not known_task:
+            self._add_new_task(task)
+            # TODO do GPI only for new tasks or for all?
+            # NB: have to do it also for every new state in that task
+
+        # do GPI, i.e. Q_max = max_i Q^{\pi_i}(s,a)
+        Q_task = np.empty([self.n_states, self.n_actions, len(self.tasks)])
+        for (tid, sf) in enumerate(self.sf_by_task):
+            Q_task[:,:,tid] = np.einsum("ijk,k", sf, task)
+
+        tid = self.tasks.index(task)
+        Q_max = np.max(Q_task[state,:,:], axis=1) # take max policy over tasks
+        # XXX self.pi_by_task[tid][state,:] = self.policy(Q_max, step=step)
+        return Q_max # self.pi_by_task[tid][state,:]
+
+    def train_online(self, task, step):
+        tid = self.tasks.index(task)
+
+        # learn only from last transition
+        (s, a, s_next, phi) = self.replay_buffer_by_task[tid].last()
+        sf = self.sf_by_task[tid]
+
+        # TEST print successor features to see convergence
+        # if s == 1:
+        #     print("psi2, action{}: {}".format(a, sf[s,a,:]))
+        # if s == 2:
+        #     print("psi3, action{}: {}".format(a, sf[s,a,:]))
+
+        psi = sf[s,a,:].squeeze()
+        a_next = np.argmax(np.squeeze(self.sf_by_task[tid][s_next,:,:]) @ task)
+                           # XXX self.pi_by_task[tid][s_next,:])
+        psi_next = sf[s_next, a_next, :].squeeze()
+        delta = phi + self.GAMMA * psi_next - psi
+
+        sf[s,a,:] += self.LEARNING_RATE * delta
+
+        # update features
+        self.sf_by_task[tid] = sf
+
+        # TODO HER: update *all* policies in s
+        #for (t,w) in enumerate(self.tasks):
+        #    Q = sf[s,:,:].squeeze() @ w
+        #    self.pi_by_task[t][s,:] = self.policy(Q, step=step)
+
+
+    def train_offline(self, task, step):
+        tid = self.tasks.index(task)
+
+        # don't train offline with too few samples, lest we bias
+        if len(self.replay_buffer_by_task[tid]) < self.BATCH_SIZE:
             return
 
-        transitions = self.replay_buffer.sample(self.BATCH_SIZE)
-        # this converts an array of Transitions to Transition of arrays
-        batch = Transition(*zip(*transitions))
-        s_batch       = torch.vstack(batch.state)
-        a_batch       = torch.vstack(batch.action)
-        phi_batch     = torch.vstack(batch.features)
-        s_next_batch  = torch.vstack(batch.next_state)
+        # TODO train all tasks?
+        for (t,w) in enumerate(self.tasks):
+            sf = self.sf_by_task[t]
 
-        # compute TD error (psi vs phi, not Q vs r!)
-        psi   = self.policy_net.forward(s_batch) # BATCH_SIZE x n_features
-        psi   = torch.reshape(psi, (self.BATCH_SIZE, self.n_actions, self.n_features))
-        index = torch.stack([a_batch for _ in range(self.n_features)], 2)
-        psi_a = psi.gather(1, index).squeeze() # only SF for chosen a
-        # get prediction for next state from target net for better stability
-        psi_next = self.target_net(s_next_batch)
-        psi_next = torch.reshape(psi_next, (self.BATCH_SIZE, self.n_actions, self.n_features))
-        psi_next = psi_next.max(1)[0].squeeze() # max over actions
-        delta    = phi_batch + self.GAMMA * psi_next - psi_a
+            # sample some transitions to replay (only those of the same task)
+            batch = self.replay_buffer_by_task[t].sample(self.BATCH_SIZE)
+            for (s, a, s_next, phi) in batch:
+                psi = sf[s,a,:].squeeze()
+                a_next = np.argmax(self.pi_by_task[t][s_next,:])
+                psi_next = sf[s_next, a_next, :].squeeze()
+                delta = phi + self.GAMMA * psi_next - psi
+                sf[s,a,:] += self.LEARNING_RATE * .05 * delta
 
-        # backprop
-        criterion = nn.SmoothL1Loss()
-        loss = criterion(self.LEARNING_RATE * delta, torch.zeros_like(delta))
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+            # update features
+            self.sf_by_task[t] = sf
+            # update policy
+            for s in range(self.n_states):
+                Q = sf[s,:,:].squeeze() @ w
+                self.pi_by_task[t][s,:] = self.policy(Q, step=step)
 
-        # copy policy net's parameters to target net
-        if step % self.TARGET_UPDATE == 0:
-            self.target_net.load_state_dict(self.policy_net.state_dict())
+    def _add_new_task(self, task):
+        self.tasks.append(task)
+        sf = np.zeros([self.n_states, self.n_actions, self.n_features]) # has to be 0 so that the psi_next = 0 for the leaf-nodes
+        sf[0:3, :, :] = 15 # optimistic init
+        self.sf_by_task.append(sf)
+        self.pi_by_task.append(np.ones([self.n_states, self.n_actions]) / self.n_actions) # uniform policy
+        self.replay_buffer_by_task.append(ReplayMemory(self.BUFFER_CAPACITY))
 
+    def store_transition(self, task, s, a, s_next, phi_next):
+        tid = self.tasks.index(task)
+        self.replay_buffer_by_task[tid].push(s, a, s_next, phi_next)
 
 
 #############################################################
@@ -115,6 +134,10 @@ class ReplayMemory(object):
     def sample(self, batch_size):
         """Sample with replacement (works even if batch_size > len(buffer))"""
         return random.choices(self.memory, k=batch_size)
+
+    def last(self):
+        """Returns last entry"""
+        return self.memory[-1]
 
     def __len__(self):
         return len(self.memory)

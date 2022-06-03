@@ -1,16 +1,22 @@
 import numpy as np
+import copy
+import random
 
 # define simple two-step decision process like in Tomov & Schulz 2021
 class TwoStepEnv():
+
+    # constants (things that stay fixed in all instances)
+    n_states = 13
+    n_actions = 3
+    n_features = 3
+    n_leaves = 9
+
     def __init__(self):
-        self.n_states = 13
-        self.n_actions = 3
-        self.n_features = 3
         self.S = range(self.n_states)
         self.A = range(self.n_actions)
         self.P = np.zeros([self.n_states, self.n_actions, self.n_states])
         self.phi = np.zeros([self.n_states, self.n_features])
-        self.terminal = np.zeros([self.n_states])
+        self.terminal = np.zeros([self.n_states], dtype=np.int16)
         self.terminal[4:13] = 1
 
         # fill transition probabilities
@@ -39,14 +45,90 @@ class TwoStepEnv():
         self.phi[12,:] = [1,0,0]
 
 
-    def optimal_trajectory(self, task):
-        """ Computes the optimal trajectory and its reward given a task. """
-        reward = self.phi @ task
-        # TODO would have to check each path, but we take a shortcut
-        # because we know there is only reward at the leaves
-        optimal_leaf   = np.argmax(reward)
-        optimal_reward = reward[optimal_leaf]
-        return (optimal_reward, optimal_leaf)
+    def optimal_trajectory(self, task, nsims=100):
+        """
+        Computes the optimal trajectory and its reward given a task.
+        Simulates nsims paths with a random policy.
+        Returns optimal reward and a vector of length n_states
+        indicating which leaf node is optimal
+        """
+        task = np.array(task)
+        reward = np.zeros(nsims)
+        leaves = np.zeros(nsims, dtype=np.int16)
+        for sim in range(0, nsims):
+            s = 0 # start at root
+            r = self.phi[s,:] @ task
+            while not self.terminal[s] == 1:
+                a = np.random.randint(self.n_actions) # random policy
+                s = self.take_action(s, a) # transition
+                r += self.phi[s,:] @ task
+            reward[sim] = r
+            leaves[sim] = s
 
-    def swap_feature(self, index, new_phi):
+        optimal_reward = np.max(reward)
+        optimal_leaves = np.zeros(TwoStepEnv.n_states, dtype=bool)
+        for s in range(TwoStepEnv.n_states):
+            if s in leaves:
+                optimal_leaves[s] = np.max(reward[leaves == s]) == optimal_reward
+        return (optimal_reward, optimal_leaves)
+
+
+    def take_action(self, s, a):
+        """ Samples next state given state and action. """
+        P = np.squeeze(self.P[s,a,:])
+        return np.nonzero(np.random.multinomial(1, P))[0][0]
+
+
+    def redefine_feature(self, index, new_phi):
+        """ Reassign the value of a specific feature. """
         self.phi[index,:] = new_phi
+
+
+    def decrease_value_of_optimal_feature(self, task, optimal_leaf):
+        """
+        TODO deprecated: this causes a bias in regret!
+        Lower the feature of an as yet optimal leaf (for a given task),
+        just in so much as another one will be optimal.
+        """
+        phi = self.phi[optimal_leaf,:]
+        # update phi by subtracting task,
+        # so features with positive weights get smaller and vice versa
+        # keep on doing this, till another one is optimal
+        # NB: because we only change leaf nodes, we only need to check for their optimality
+        Q      = phi @ task
+        Q_leaf = [Q - 1] # dummy
+        while not any(Q_leaf > Q): # as long as no other leaf is optimal
+            phi = phi - task
+            self.swap_feature(optimal_leaf, phi)
+            Q_leaf = self.phi[self.terminal==1,:] @ task
+            Q = phi @ task
+        return phi #, optimal_leaf) # return new phi + index
+
+
+    def swap_optimal_feature(self, optimal_leaves):
+        """
+        Swap features of all optimal leaves with those from suboptimal ones.
+        This way, there will be an enforced feature prediction error,
+        when using an old (converged) policy.
+        """
+        leaves = range(4,13) # TODO don't hardcode
+
+        optimal = np.nonzero(optimal_leaves)[0].tolist() # 01 to list
+        suboptimal = set(leaves) - set(optimal)
+
+        for leaf in optimal:
+            if suboptimal == set(): # HACK if empty, this should not happen!
+                suboptimal = set(leaves) # but if if does, pick from all
+            index = random.choices(list(suboptimal))
+            tmp = self.phi[leaf,:]
+            self.phi[leaf,:] = self.phi[index,:]
+            self.phi[index,:] = tmp
+            # remove index from suboptimal, so we don't swap the same twice
+            suboptimal = suboptimal - set(index)
+
+
+    def swap_transitions(self, optimal_leaves):
+        """
+        Swap two transitions on the first stage.
+        """
+        pass

@@ -1,101 +1,186 @@
 import numpy as np
 import torch
 import random
+import copy
+import os
+# progress bar
+from time import sleep
+from tqdm import tqdm
+# plotting
 from matplotlib import pyplot as plt
+import seaborn as sb
+# stats
+import pandas as pd
+import scipy.stats as stats
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
 
+
+# load environment and models
 from env import TwoStepEnv
 from uvfa import UVFA
 from sfgpi import SFGPI
 
-# Implements the experiment logic
-# (blockwise training on some tasks, swapping out a task after each block).
-# Models are updated in an online fashion.
+#########################
+# SIMULATION-PARAMETERS #
+#########################
+# note: N, B, T and M are short aliases, used mainly in the csv filename,
+# but will be avoided in code for legibility
+N = n_subjects = 20 # 50  # repetitions of simulation to average over
+B = n_blocks = 50         # number of blocks
+T = block_size = 100      # number of trials in a block
+M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
+p_task_change = 0         # probability of task change
+p_feature_change = .5     # probability of feature change
+p_transition_change = 0   # TODO implement
 
-block_size = 300 # for now fixed, might be stochastic
-n_blocks = 4
-n_tasks_per_block = 2 # always learn some tasks concurrently
-
-# hyperparams
-# for simulated annealing lower temperature and epsilon
-# softmax temperature for softmax policy
-TAU_START = 10
-TAU_DECAY = 20
-TAU_END   = 1
-# epsilon for epsilon-greedy policy
-EPS_START = .05
+#########################
+# exploration           #
+#########################
+# dynamic exploration schedule
+EPS_START = .5
 EPS_DECAY = 20
-EPS_END = .05
+EPS_END   = .05
+def epsilon_greedy(Q, block, trial):
+    """
+    Returns an epsilon-greedy policy and epsilon for a given block and trial.
+    The 0-th block of the simulation is free exploration with epsilon = 1.
+    For all subsequent blocks, the first 10 trials are greedy (epsilon = 0).
+    After that, epsilon follows an exponential decay starting at epsilon = 0.5.
+    """
+    if block == 0:
+        eps = 1 # random in first block
+    elif trial < 10:
+        eps = 0 # greedy for the first steps in a block
+    else: # normal decay
+        eps = EPS_END + (EPS_START - EPS_END) * np.exp(-(trial-10)/ EPS_DECAY)
 
-LEARNING_RATE = 1
-GAMMA = .99 # discounting for TD
+    pi = np.ones(TwoStepEnv.n_actions) * eps / TwoStepEnv.n_actions
+    pi[np.argmax(Q)] += 1 - eps
+    return (pi, eps)
+
+#########################
+# model hyperparams     #
+#########################
+# note: I haven't really optimised these, learning rates might not be balanced.
+LEARNING_RATE_UVFA = 2
+LEARNING_RATE_SFGPI = .75
+GAMMA = .99           # discounting for TD
 BUFFER_CAPACITY = 250 # how many transitions can be stored for offline learning
-BATCH_SIZE = 150 # from how many transitions to learn at a time
-TARGET_UPDATE = 2 # update target net every N trials
+BATCH_SIZE = 50       # from how many transitions to learn at a time (UVFA only)
 
-# init environment and tasks
-env = TwoStepEnv()
-tasks = [[1,0,0],  [0,1,0],  [0,0,1],  [1,1,0],  [1,0,1], [0,1,1],  [1,1,1],
+#########################
+# Possible tasks        #
+#########################
+# Tomov & Schulz 2021
+#TASKS = [[1,-1,0], [-1,1,0], [1,-2,0], [-2,1,0], [1,1,1]]
+
+# all combinations of -1, 0, 1, except for [0,0,0]
+TASKS = [[1,0,0],  [0,1,0],  [0,0,1],  [1,1,0],  [1,0,1], [0,1,1],  [1,1,1],
          [-1,0,0], [0,-1,0], [0,0,-1], [-1,1,0], [-1,0,1], [0,-1,1], [-1,1,1],
          [1,-1,0], [1,0,-1], [0,1,-1], [1,-1,1], [1,1,-1], [-1,-1,0],
          [-1,0,-1], [0,-1,-1], [-1,-1,1], [-1,1,-1], [1,-1,-1], [-1,-1,-1]]
-random.shuffle(tasks) # shuffles inplace
-tasks = [[1,-1,0], [-1,1,0], [1,-2,0], [-2,1,0], [1,1,1]]
-tasks_of_block = {block: tasks[block:block+n_tasks_per_block]
-                  for block in range(n_blocks)}
-feature5_block = {0: env.phi[5,:], 1: [5,0,0], 2: [5,0,0], 3: [5,0,0]}
-optimal_reward, optimal_leaves = zip(*[env.optimal_trajectory(w)
-                                       for w in tasks])
-
-# init UVFA model
-input_size = env.n_states + env.n_features # UVFA gets the state + the task
-output_size = env.n_actions # and predicts Q values for all actions
-uvfa = UVFA(input_size, output_size,
-            LEARNING_RATE, GAMMA, BUFFER_CAPACITY, BATCH_SIZE, TARGET_UPDATE)
-uvfa_regret = [] # record of all regrets across trials and blocks
-uvfa_leaves = [] # record of all leaf nodes
-
-# init SFGPI
-input_size = env.n_states # SFGPI only gets the state (not the task!)
-output_size = env.n_actions * env.n_features # and predicts SF for all actions
-sfgpi = SFGPI(input_size, output_size, env.n_actions, env.n_features,
-              LEARNING_RATE, GAMMA, BUFFER_CAPACITY, BATCH_SIZE, TARGET_UPDATE)
-sfgpi_regret = [] # record of all regrets across trials and blocks
-sfgpi_leaves = [] # record of all leaf nodes
 
 
+def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
+                         p_task_change, p_feature_change):
+    """
+    Inits a blocked experiment in which both tasks and features can change.
+    p_*_change are the respective probabilities of task and feature changes.
+    Returns a list of blocks, i.e. (tasks, world) tuples,
+    as well as the optimal rewards and leaves for each.
+    """
+    blocks = [] # list of tuples, each of which of the form (tasks, world)
+    tasks_of_block = []
+    world_of_block = []
+    optimal_reward = np.zeros((n_blocks, n_tasks_per_block), dtype=np.int16)
+    optimal_leaves = np.zeros((n_blocks, n_tasks_per_block, TwoStepEnv.n_states), dtype=bool)
+    changes = [] # list of tuples, each like (task_change, feature_change)
 
-def run_uvfa():
+    # init environment and tasks
+    env = TwoStepEnv()
+    w_old = random.choices(TASKS, k=n_tasks_per_block)
+    # w_old has dim n_tasks_per_block * D
+
+    for b in range(n_blocks):
+        task_change = random.random() < p_task_change # sample Bernoulli
+        if task_change:
+            w_old = w_old[:-1] # discard the oldest task
+            w_new = random.choices(TASKS) # sample new task
+            # stack new and old tasks, such that the new task is the first
+            w_old = w_new + w_old
+            # TODO make sure, the new task is truely distinct from all old ones
+        tasks_of_block.append(w_old)
+
+        feature_change = random.random() < p_feature_change # sample Bernoulli
+        if feature_change and b > 0:
+            env = copy.deepcopy(env) # important!
+            # XXX for which task to change the optimal leaf's feature?
+            # take the newest task from the old block (position 0 in block b-1)
+            env.swap_optimal_feature(optimal_leaves[b-1,0,:])
+        world_of_block.append(env)
+
+        for t, w in enumerate(w_old):
+            x, y = world_of_block[b].optimal_trajectory(w)
+            optimal_reward[b,t] = x
+            optimal_leaves[b,t,:] = y
+
+        # store changes
+        changes.append((task_change, feature_change))
+
+    blocks = list(zip(tasks_of_block, world_of_block))
+    return (blocks, optimal_reward, optimal_leaves, changes)
+
+
+def init_blocks_smartly():
+    """
+    Design a curriculum of tasks somehow,
+    e.g. such that tasks are maximally diverse in a block.
+    """
+    pass
+
+
+def run_uvfa(blocks, optimal_reward, verbose=True):
+    """
+    Run UVFA algorithm, which is a network model (task, state) -> Q
+    trained by backprop and offline learning from a replay buffer.
+    Returns the regret and chosen leaves (= paths) for each block and trial.
+    """
     print("UVFA")
-    for block in range(n_blocks):
-        print("Tasks of this block: {}".format(tasks_of_block[block]))
 
-        # TODO
-        env.swap_feature(5, feature5_block[block])
-        print("Feature 5 of this block: {}".format(feature5_block[block]))
+    # init UVFA model
+    input_size = TwoStepEnv.n_states + TwoStepEnv.n_features # UVFA gets the state + the task
+    output_size = TwoStepEnv.n_actions # and predicts Q values for all actions
+    uvfa = UVFA(input_size, output_size, LEARNING_RATE_UVFA,
+                GAMMA, BUFFER_CAPACITY, BATCH_SIZE, TARGET_UPDATE=2)
+    uvfa_regret = [] # record of all regrets across trials and blocks
+    uvfa_leaves = [] # record of all leaf nodes
 
-        # TODO optimal trajectory of block taking feature change into account
-        #optimal_reward[block], optimal_leaves[block] = zip([env.optimal_trajectory(w) for w in tasks_of_block[block]])
+    for block, (tasks, env) in tqdm(enumerate(blocks), total=n_blocks):
+
+        if verbose:
+            print("Tasks of this block: {}".format(tasks))
+            #print("phi-6 of this block: {}".format(env.phi[5,:]))
 
         for trial in range(block_size):
-            w = tasks_of_block[block][trial % n_tasks_per_block] # alternate tasks
+            w = tasks[trial % n_tasks_per_block] # alternate tasks
 
             # simulate trajectory
             s = 0 # start at root
             trial_reward = 0
             while not env.terminal[s]:
-                s_1hot = np.zeros(env.n_states); s_1hot[s] = 1
+                s_1hot = np.zeros(TwoStepEnv.n_states); s_1hot[s] = 1
                 sw = torch.from_numpy(np.hstack([s_1hot, w])).float()
-                Q = uvfa.predict(sw)
+                Q = uvfa.predict_Q(sw)
                 Q = Q.detach().numpy().astype(np.float64)
-                step = trial # TODO could be within or across blocks
-                pi = policy(Q, step)
+                pi,_ = epsilon_greedy(Q, block, trial)
 
                 # sample next action / state
                 a = np.nonzero(np.random.multinomial(1, pi))[0]
                 a = torch.from_numpy(a)
                 s_next = np.squeeze(env.P[s,a,:])
                 s_next = np.nonzero(np.random.multinomial(1, s_next))[0][0]
-                s_next_1hot = np.zeros(env.n_states); s_next_1hot[s_next] = 1
+                s_next_1hot = np.zeros(TwoStepEnv.n_states); s_next_1hot[s_next] = 1
                 sw_next = torch.from_numpy(np.hstack([s_next_1hot, w])).float()
 
                 # compute reward of next state
@@ -103,168 +188,228 @@ def run_uvfa():
                 r = env.phi[s_next] @ w
                 trial_reward += r
 
-                # transit and store transition in replay buffer
-                s = s_next
+                # store transition in replay buffer and transit
                 uvfa.replay_buffer.push(sw, a, sw_next, torch.tensor(r))
+                s = s_next
 
             # update the neural network after each trial
             uvfa.train(trial)
             # fill record of trial
-            regret = optimal_reward[block + trial % n_tasks_per_block] - \
+            regret = optimal_reward[block, trial % n_tasks_per_block] - \
                      trial_reward
             uvfa_regret.append(regret)
             uvfa_leaves.append(s)
             #print("trial {}: reward {}".format(trial, trial_reward))
 
+    return (uvfa_regret, uvfa_leaves)
 
-def run_sfgpi():
+
+def run_sfgpi(blocks, optimal_reward, verbose=True):
+    """
+    Run SFGPI algorithm, which uses libraries of successor features for each task
+    to compute the best policy for an unseen task by general. policy improvement.
+    Returns the regret and chosen leaves (= paths) for each block and trial.
+    """
     print("SFGPI")
-    for block in range(n_blocks):
-        print("Tasks of this block: {}".format(tasks_of_block[block]))
 
-        # TODO
-        env.swap_feature(5, feature5_block[block])
-        print("Feature 5 of this block: {}".format(feature5_block[block]))
+    # init SFGPI
+    input_size = TwoStepEnv.n_states # SFGPI only gets the state (not the task)
+    output_size = TwoStepEnv.n_actions * TwoStepEnv.n_features # and predicts SF for all actions
+    sfgpi = SFGPI(TwoStepEnv.n_states, TwoStepEnv.n_actions, TwoStepEnv.n_features,
+                  LEARNING_RATE_SFGPI, GAMMA, BUFFER_CAPACITY, BATCH_SIZE)
+    sfgpi_regret = [] # record of all regret across trials and blocks
+    sfgpi_leaves = [] # record of all leaf nodes
+
+    for block, (tasks, env) in tqdm(enumerate(blocks), total=n_blocks):
+
+        if verbose:
+            print("Tasks of this block: {}".format(tasks))
+            #print("phi-6 of this block: {}".format(env.phi[5,:]))
 
         for trial in range(block_size):
-            w = tasks_of_block[block][trial % n_tasks_per_block] # alternate tasks
+            w = tasks[trial % n_tasks_per_block] # alternate tasks
 
             # simulate trajectory
             s = 0 # start at root
             trial_reward = 0
             while not env.terminal[s]:
-                s_1hot = np.zeros(env.n_states); s_1hot[s] = 1
-                s_1hot = torch.from_numpy(s_1hot).float()
-                psi = sfgpi.predict(s_1hot)
-                Q   = psi @ w
-                # TODO have to take max over Q wrt to the policies (1 per task)
-                step = trial # TODO could be within or across blocks
-                pi = policy(Q, step)
+                Q = sfgpi.predict_Q(s, w)
+                pi,_ = epsilon_greedy(Q, block, trial)
 
                 # sample next action / state
                 a = np.nonzero(np.random.multinomial(1, pi))[0]
-                a = torch.from_numpy(a)
                 s_next = np.squeeze(env.P[s,a,:])
                 s_next = np.nonzero(np.random.multinomial(1, s_next))[0][0]
-                s_next_1hot = np.zeros(env.n_states); s_next_1hot[s_next] = 1
-                s_next_1hot = torch.from_numpy(s_next_1hot).float()
 
                 # importantly, we don't store reward in transitions
                 # but only the next state's features
-                phi_next = torch.tensor(env.phi[s_next])
+                phi_next = env.phi[s_next]
 
                 # anyways, compute reward of next state
                 # (NB: here, rewards are received in states, not with actions)
                 r = env.phi[s_next] @ w
                 trial_reward += r
 
-                # transit and store transition in replay buffer
+                # store transition in replay buffer and transit
+                sfgpi.store_transition(w, s, a, s_next, phi_next)
                 s = s_next
-                sfgpi.replay_buffer.push(s_1hot, a, s_next_1hot, phi_next)
+
+                # train online (last transition only)
+                sfgpi.train_online(w, trial)
 
             # update the neural network after each trial
-            sfgpi.train(trial)
+            #sfgpi.train_offline(w, trial)
+
             # fill record of trial
-            regret = optimal_reward[block + trial % n_tasks_per_block] - \
+            regret = optimal_reward[block, trial % n_tasks_per_block] - \
                      trial_reward
             sfgpi_regret.append(regret)
             sfgpi_leaves.append(s)
-            # if s == 9: # test if psi ~ phi for an example state
-            #     print("trial {}: psi9 {}".format(trial, psi[a,:]))
+            #if s == 5: # test if psi ~ phi for an example state
+            #    print("trial {}: psi5 {}".format(trial, psi[a,:]))
 
-def epsilon_greedy(Q, step):
-    eps = EPS_END + (EPS_START - EPS_END) * np.exp(-1. * step / EPS_DECAY)
-    #print(eps)
-    pi = np.ones(env.n_actions) * eps / env.n_actions
-    pi[np.argmax(Q)] += 1 - eps
-    return pi
-
-def softmax(Q, step):
-    tau = TAU_END + (TAU_START - TAU_END) * np.exp(-1. * step / TAU_DECAY)
-    #print(tau)
-    pi = np.exp(Q / tau)
-    pi = pi / np.sum(pi)
-    return pi
-
-def plot_regret(single_tasks=False):
-    plt.figure()
-
-    for y in [uvfa_regret, sfgpi_regret]:
-        if single_tasks:
-            for p in range(n_tasks_per_block):
-                x = range(n_blocks*block_size//n_tasks_per_block)
-                y = y[p::n_tasks_per_block]
-                y_smoothed = np.convolve(y, np.ones(10), 'same') / 10
-                plt.plot(x, y_smoothed)
-        else:
-            x = range(n_blocks*block_size)
-            y_smoothed = np.convolve(y, np.ones(10), 'same') / 10
-            plt.plot(x, y_smoothed)
-
-    # plot vertical bars between blocks
-    plt.vlines(range(0, block_size*n_blocks, block_size), 0, max(y))
-
-    # label which tasks were learned
-    for block in range(n_blocks):
-        s = "w1 = {}\nw2 = {}".format(*tasks_of_block[block])
-        plt.annotate(s, [block * block_size + 20, max(y) - 1])
-
-    plt.xlabel("trial")
-    plt.ylabel("regret")
-    plt.legend(["UVFA", "SFGPI"], loc="center right")
-    plt.show()
+    return (sfgpi_regret, sfgpi_leaves)
 
 
-def plot_leaves():
-    plt.figure()
+def _min_distance(wold, wnew, metric="euclid"): # TODO rename vectors
+    """
+    Calculates the minimal distance between a set of vectors wold and wnew.
+    """
+    if metric == "euclid":
+        d = min([np.sqrt((wnew-w) @ (wnew-w).T) for w in wold])
+    elif metric == "angle":
+        d = 1 - min([abs(wnew @ w.T / np.sqrt(wnew @ wnew.T) / np.sqrt(w @ w.T))
+                     for w in wold])
+    elif metric == "manhattan":
+        d = min([np.sum(np.abs(wnew-w)) for w in wold])
+    else:
+        raise ValueError()
+    return d
 
-    for p, (leaves, regret) in enumerate([[uvfa_leaves, uvfa_regret],
-                                          [sfgpi_leaves, sfgpi_regret]]):
-        plt.subplot(3, 1, p+1)
-        y = np.zeros((len(leaves), env.n_states))
-        y[range(len(leaves)), leaves] = 1 # 1hot encoding
+def _in_span(wall, wold):
+    # 0 if wnew in span(wold), else 1
+    return np.linalg.matrix_rank(wall) - np.linalg.matrix_rank(wold)
 
-        # distinguish correct (=1) and incorrect choices (=-1)
-        y = y - 2 * y * np.hstack([np.array(regret)[np.newaxis].T != 0
-                                   for _ in range(env.n_states)])
 
-        cmap = plt.get_cmap("PiYG", 3) # 3 values: -1 (pink), 0, 1 (green)
-        plt.imshow(y.T, cmap=cmap, aspect="auto", interpolation="none")
-        ylim = [3.5,12.5] # hardcoded TODO use env.terminal
-        plt.ylim(ylim)
-        plt.yticks(ticks=range(4,13), labels=range(5,14)) # hardcoded
-        plt.title("UVFA" if p==0 else "SFGPI")
+def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
+                         sfgpi_regret, sfgpi_leaves, optimal_leaves):
+    """
+    Make a dataframe with the first n trials (n_trials) of each block.
+    """
+    df = pd.DataFrame(columns=["block", "trial", "algo", "task",
+                               "leaf", "regret", "correct",
+                               "task_change", "task_span", "task_angle",
+                               "task_euclid", "task_manhattan",
+                               "feature_change", "feature_angle",
+                               "feature_euclid", "feature_manhattan",
+                               "max_value_diff",
+                               "mean_block_regret", "mean_block_correct"])
+    # here we look only at the first trial of a task in a block
+    for algo, leaves, regret in zip(["uvfa", "sfgpi"],
+                                    [uvfa_leaves, sfgpi_leaves],
+                                    [uvfa_regret, sfgpi_regret]):
+        leaves = np.reshape(leaves, (n_blocks, block_size))
+        regret = np.reshape(regret, (n_blocks, block_size))
+        for b in range(1, n_blocks): # skip first block
+            old_tasks, old_world = blocks[b-1]
+            new_tasks, new_world = blocks[b]
 
-        # plot vertical bars between blocks
-        plt.vlines(range(0, block_size*n_blocks, block_size), *ylim)
+            new_w = np.array(new_tasks) # n_task_per_block x dim
+            old_w = np.array(old_tasks) # n_task_per_block x dim
 
-    plt.xlabel("trial")
-    plt.ylabel("final node")
+            # changes?
+            task_change, feature_change = changes[b-1]
 
-    # extra subplot for labels
-    plt.subplot(3, 1, 3)
-    plt.axis("off")
-    plt.xlim([0, n_blocks])
-    plt.ylim([0, 1.2])
-    # label which tasks were learned
-    for block in range(n_blocks):
-        s = "w1 = {}\nw2 = {}".format(*tasks_of_block[block])
-        s = s + "\nphi6 = {}".format(feature5_block[block])
-        s = s + "\n\noptimal = {}".format( # +1 because of 0-indexing
-            np.array(optimal_leaves[block:block+n_tasks_per_block]) + 1)
-        plt.annotate(s, [block + .2, 1])
+            # mean performance over whole block
+            mean_block_regret = np.mean(regret[b,:])
+            mean_block_correct = np.mean(regret[b,:] == 0)
 
-    cbar = plt.colorbar(orientation="horizontal", ticks=[-.66,0,.66])
-    cbar.ax.set_xticklabels(["wrong", "", "correct"])
+            M = n_tasks_per_block # TODO !!!
 
-    plt.tight_layout()
-    plt.show()
+            # distances are trial specific
+            for t in range(n_trials):
+                # task distances
+                task_angle = _min_distance(old_w, new_w[t % M], metric="angle")
+                task_euclid = _min_distance(old_w, new_w[t % M], metric="euclid")
+                task_manhattan = _min_distance(old_w, new_w[t % M], metric="manhattan")
+
+                # feature distances
+                leaf = leaves[b,t]
+                old_phi = old_world.phi[leaf,:]
+                new_phi = new_world.phi[leaf,:]
+                feature_angle  = 1 - abs(new_phi @ old_phi.T / np.sqrt(new_phi @ new_phi.T)
+                                     / np.sqrt(old_phi @ old_phi.T))
+                feature_euclid = np.sqrt((new_phi-old_phi) @ (new_phi-old_phi).T)
+                feature_manhattan = np.sum(np.abs(new_phi-old_phi))
+
+                # maximal value difference
+                max_value_diff = np.max([np.max(np.abs(new_world.phi @ new_w[t % M].T
+                                                       - old_world.phi @ w.T))
+                                         for w in old_w])
+
+                row = {
+                    "block":          b,
+                    "trial":          t,
+                    "algo":           algo,
+                    "task":           t % n_tasks_per_block,
+                    "leaf":           leaves[b,t],
+                    "regret":         regret[b,t],
+                    "correct":        regret[b,t] == 0,
+                    "task_change":    task_change and t % n_tasks_per_block == 0,
+                    "task_span":      _in_span(new_tasks, old_w),
+                    "task_angle":     task_angle,
+                    "task_euclid":    task_euclid,
+                    "task_manhattan": task_manhattan,
+                    "feature_change": feature_change,
+                    "feature_angle":  feature_angle,
+                    "feature_euclid": feature_euclid,
+                    "feature_manhattan": feature_manhattan,
+                    "max_value_diff": max_value_diff,
+                    "mean_block_regret": mean_block_regret,
+                    "mean_block_correct": mean_block_correct,
+                }
+                df = pd.concat([df, pd.DataFrame(row, columns=df.columns, index=[b, t, algo])])
+
+    # TODO check if df looks ok
+    #print(df.head())
+    return df
+
+
+def simulate_subjects():
+    """
+    A subject would see all of the blocks (n_blocks) in a row,
+    applying both algorithms.
+    """
+    df_subjects = pd.DataFrame()
+
+    for subject in range(n_subjects):
+        print(f"Subject {subject}")
+        blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
+            N, B, T, M, p_task_change, p_feature_change)
+        uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
+        sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
+
+        n_first_trials = 10
+        df = collect_first_trials(blocks, n_first_trials, changes,
+                                  uvfa_regret, uvfa_leaves,
+                                  sfgpi_regret, sfgpi_leaves, optimal_leaves)
+        df.insert(0, "subject", subject)
+        df_subjects = pd.concat([df_subjects, df])
+
+    return df_subjects
+
+
 
 
 if __name__ == "__main__":
-    # policy = softmax
-    policy = epsilon_greedy
-    run_uvfa()
-    run_sfgpi()
-    plot_leaves()
-    plot_regret()
+    # run for many subjects
+    df = simulate_subjects()
+
+    filename = f"./sim/sim_N{n_subjects}_B{n_blocks}_T{block_size}_M{n_tasks_per_block}_ptask{p_task_change}_pfeature{p_feature_change}.csv"
+
+    append_mode = False # if we want to extend an existing csv
+    if os.path.exists(filename) and append_mode:
+        df.to_csv(filename, header=False, index=False, mode="a")
+    else:
+        df.to_csv(filename, index=False)
+
