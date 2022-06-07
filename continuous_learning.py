@@ -26,13 +26,13 @@ from sfgpi import SFGPI
 #########################
 # note: N, B, T and M are short aliases, used mainly in the csv filename,
 # but will be avoided in code for legibility
-N = n_subjects = 20 # 50  # repetitions of simulation to average over
+N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0         # probability of task change
-p_feature_change = .5     # probability of feature change
-p_transition_change = 0   # TODO implement
+p_task_change = 0       # probability of task change
+p_feature_change =      # probability of feature change
+p_transition_change = 0.5   # TODO implement
 
 #########################
 # exploration           #
@@ -255,7 +255,7 @@ def run_sfgpi(blocks, optimal_reward, verbose=True):
                 s = s_next
 
                 # train online (last transition only)
-                sfgpi.train_online(w, trial)
+                sfgpi.train_online(w)
 
             # update the neural network after each trial
             #sfgpi.train_offline(w, trial)
@@ -302,7 +302,7 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                                "task_euclid", "task_manhattan",
                                "feature_change", "feature_angle",
                                "feature_euclid", "feature_manhattan",
-                               "max_value_diff",
+                               "max_value_diff", "possible_correct",
                                "mean_block_regret", "mean_block_correct"])
     # here we look only at the first trial of a task in a block
     for algo, leaves, regret in zip(["uvfa", "sfgpi"],
@@ -351,11 +351,11 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                     "block":          b,
                     "trial":          t,
                     "algo":           algo,
-                    "task":           t % n_tasks_per_block,
+                    "task":           t % M,
                     "leaf":           leaves[b,t],
                     "regret":         regret[b,t],
                     "correct":        regret[b,t] == 0,
-                    "task_change":    task_change and t % n_tasks_per_block == 0,
+                    "task_change":    task_change and t % M == 0,
                     "task_span":      _in_span(new_tasks, old_w),
                     "task_angle":     task_angle,
                     "task_euclid":    task_euclid,
@@ -365,6 +365,7 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                     "feature_euclid": feature_euclid,
                     "feature_manhattan": feature_manhattan,
                     "max_value_diff": max_value_diff,
+                    "possible_correct": np.sum(optimal_leaves[b,t % M,:]),
                     "mean_block_regret": mean_block_regret,
                     "mean_block_correct": mean_block_correct,
                 }
@@ -385,7 +386,7 @@ def simulate_subjects():
     for subject in range(n_subjects):
         print(f"Subject {subject}")
         blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
-            N, B, T, M, p_task_change, p_feature_change)
+            B, T, M, p_task_change, p_feature_change)
         uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
         sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
 

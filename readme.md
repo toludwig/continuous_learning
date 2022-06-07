@@ -29,7 +29,7 @@ i.e. their chosen actions and the corresponding regret, over the whole block.
 `plot_stats.py` plots different summary statistics (mainly 1st-block statistics) of the simulations.
 
 ## How to use the code?
-1. To run the simulation, go to `continuous_learning.py` and edit the simulation parameters at the top of the file. /*Careful*/: $N=1$ subject takes ~45sec with $B=50$ and $T=300$.
+1. To run the simulation, go to `continuous_learning.py` and edit the simulation parameters at the top of the file. *Careful*: $N=1$ subject takes ~45sec with $B=50$ and $T=300$.
 2. Run `python continuous_learning.py` to run extensive simulations and store .csvs of the summary statistics.
 3. Run `python plot_stats.py` to see these summary statistics. Pick any csv file, by editing the simulation parameters (again at the top of the file).
 

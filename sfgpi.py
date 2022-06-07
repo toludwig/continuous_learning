@@ -45,7 +45,7 @@ class SFGPI():
         # XXX self.pi_by_task[tid][state,:] = self.policy(Q_max, step=step)
         return Q_max # self.pi_by_task[tid][state,:]
 
-    def train_online(self, task, step):
+    def train_online(self, task):
         tid = self.tasks.index(task)
 
         # learn only from last transition

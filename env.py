@@ -50,12 +50,12 @@ class TwoStepEnv():
         Computes the optimal trajectory and its reward given a task.
         Simulates nsims paths with a random policy.
         Returns optimal reward and a vector of length n_states
-        indicating which leaf node is optimal
+        indicating which leaf nodes are optimal.
         """
         task = np.array(task)
         reward = np.zeros(nsims)
         leaves = np.zeros(nsims, dtype=np.int16)
-        for sim in range(0, nsims):
+        for sim in range(nsims):
             s = 0 # start at root
             r = self.phi[s,:] @ task
             while not self.terminal[s] == 1:
@@ -120,7 +120,7 @@ class TwoStepEnv():
             if suboptimal == set(): # HACK if empty, this should not happen!
                 suboptimal = set(leaves) # but if if does, pick from all
             index = random.choices(list(suboptimal))
-            tmp = self.phi[leaf,:]
+            tmp = copy.copy(self.phi[leaf,:])
             self.phi[leaf,:] = self.phi[index,:]
             self.phi[index,:] = tmp
             # remove index from suboptimal, so we don't swap the same twice
@@ -130,5 +130,12 @@ class TwoStepEnv():
     def swap_transitions(self, optimal_leaves):
         """
         Swap two transitions on the first stage.
+        Always change such that the optimal path is affected.
         """
-        pass
+        optimal_leaf = np.nonzero(optimal_leaves)[0][0] # pick the 1st optimal
+        optimal_s = (optimal_leaf-1) // self.n_actions # parent of optimal leaf
+        other_s = set([1,2,3]) - set([optimal_parent])
+        other_s = np.random.choice(other_s)
+
+        self.P[0, :, optimal_s] = self.P[0, :, other_s]
+        self.P[0, :, other_s] = self.P[0, :, optimal_s]
