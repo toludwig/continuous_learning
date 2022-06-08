@@ -23,8 +23,8 @@ B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
 p_task_change = 0         # probability of task change
-p_feature_change = 0    # probability of feature change
-p_transition_change = 0.5 # probability of transition change
+p_feature_change = 0.5    # probability of feature change
+p_transition_change = 0   # probability of transition change
 
 #########################
 # exploration           #
@@ -296,16 +296,7 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
     Make a dataframe with the first n trials (n_trials) of each block.
     """
     df = pd.DataFrame()
-    # columns=["block", "trial", "algo", "task",
-    #                            "leaf", "regret", "correct",
-    #                            "task_change", "task_span", "task_angle",
-    #                            "task_euclid", "task_manhattan",
-    #                            "feature_change", "feature_angle",
-    #                            "feature_euclid", "feature_manhattan",
-    #                            "max_value_diff", "transition_change",
-    #                            "possible_correct",
-    #                            "mean_block_regret", "mean_block_correct"])
-    # here we look only at the first trial of a task in a block
+
     for algo, leaves, regret in zip(["uvfa", "sfgpi"],
                                     [uvfa_leaves, sfgpi_leaves],
                                     [uvfa_regret, sfgpi_regret]):
