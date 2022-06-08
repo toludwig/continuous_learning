@@ -198,13 +198,13 @@ if __name__ == "__main__":
     # TODO filter only first 50 blocks
     #df = df[df["block"] < 50]
 
-    plot_first_n_trials(df, offset=0, change=change, ymeasure=ymeasure)
+    #plot_first_n_trials(df, offset=0, change=change, ymeasure=ymeasure)
 
     #plot_distance(df, metric="task_euclid", ymeasure=ymeasure)
     #plot_distance(df, metric="max_value_diff", ymeasure=ymeasure)
 
-    #plot_changes(df, change=change, ymeasure=ymeasure)
+    plot_changes(df, change=change, ymeasure=ymeasure)
 
-    #plot_blocks(df, change=change, ymeasure=ymeasure) # "mean_block_regret")
+    plot_blocks(df, change=change, ymeasure=ymeasure) # "mean_block_regret")
 
     #plot_possible_correct(df, change=change)

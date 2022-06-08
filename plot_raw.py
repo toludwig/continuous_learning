@@ -163,7 +163,7 @@ def plot_epsilon():
 if __name__ == "__main__":
 
     blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
-        B, T, M, p_task_change, p_feature_change)
+        B, T, M, p_task_change, p_feature_change, p_transition_change)
     uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
     sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
 

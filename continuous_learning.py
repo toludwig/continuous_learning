@@ -79,13 +79,13 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
     """
     Inits an experiment in which tasks, features and transitions can change
     stochastically, p_*_change are the probabilities of the respective changes.
-    Returns a list of blocks, i.e. (tasks, world) tuples,
+    Returns a list of blocks, i.e. (tasks, env) tuples,
     as well as the optimal rewards and leaves for each.
     changes is a boolean tuple of booleans indicating what changed.
     """
-    blocks = [] # list of tuples, each of which of the form (tasks, world)
+    blocks = [] # list of tuples, each of which of the form (tasks, env)
     tasks_of_block = []
-    world_of_block = []
+    env_of_block = []
     optimal_reward = np.zeros((n_blocks, n_tasks_per_block), dtype=np.int16)
     optimal_leaves = np.zeros((n_blocks, n_tasks_per_block, TwoStepEnv.n_states), dtype=bool)
     changes = [] # list of tuples, each like (task_change, feature_change)
@@ -108,26 +108,26 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
         feature_change = random.random() < p_feature_change # sample Bernoulli
         if feature_change and b > 0:
             env = copy.deepcopy(env)
-            # change feature of the leaves that are optimal wrt. the new task
+            # change feature of the leaves that were optimal wrt. the new task
             env.swap_optimal_feature(optimal_leaves[b-1,0,:])
 
         transition_change = random.random() < p_transition_change
         if transition_change and b > 0:
             env = copy.deepcopy(env)
-            # change transition of the path that is optimal wrt. the new task
+            # change transition of the path that was optimal wrt. the new task
             env.swap_transitions(optimal_leaves[b-1,0,:])
 
-        world_of_block.append(env)
+        env_of_block.append(env)
 
         for t, w in enumerate(w_old):
-            x, y = world_of_block[b].optimal_trajectory(w)
+            x, y = env_of_block[b].optimal_trajectory(w)
             optimal_reward[b,t] = x
             optimal_leaves[b,t,:] = y
 
         # store changes
         changes.append((task_change, feature_change, transition_change))
 
-    blocks = list(zip(tasks_of_block, world_of_block))
+    blocks = list(zip(tasks_of_block, env_of_block))
     return (blocks, optimal_reward, optimal_leaves, changes)
 
 
@@ -295,15 +295,16 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
     """
     Make a dataframe with the first n trials (n_trials) of each block.
     """
-    df = pd.DataFrame(columns=["block", "trial", "algo", "task",
-                               "leaf", "regret", "correct",
-                               "task_change", "task_span", "task_angle",
-                               "task_euclid", "task_manhattan",
-                               "feature_change", "feature_angle",
-                               "feature_euclid", "feature_manhattan",
-                               "max_value_diff", "transition_change",
-                               "possible_correct",
-                               "mean_block_regret", "mean_block_correct"])
+    df = pd.DataFrame()
+    # columns=["block", "trial", "algo", "task",
+    #                            "leaf", "regret", "correct",
+    #                            "task_change", "task_span", "task_angle",
+    #                            "task_euclid", "task_manhattan",
+    #                            "feature_change", "feature_angle",
+    #                            "feature_euclid", "feature_manhattan",
+    #                            "max_value_diff", "transition_change",
+    #                            "possible_correct",
+    #                            "mean_block_regret", "mean_block_correct"])
     # here we look only at the first trial of a task in a block
     for algo, leaves, regret in zip(["uvfa", "sfgpi"],
                                     [uvfa_leaves, sfgpi_leaves],
@@ -311,8 +312,8 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
         leaves = np.reshape(leaves, (n_blocks, block_size))
         regret = np.reshape(regret, (n_blocks, block_size))
         for b in range(1, n_blocks): # skip first block
-            old_tasks, old_world = blocks[b-1]
-            new_tasks, new_world = blocks[b]
+            old_tasks, old_env = blocks[b-1]
+            new_tasks, new_env = blocks[b]
 
             new_w = np.array(new_tasks) # n_task_per_block x dim
             old_w = np.array(old_tasks) # n_task_per_block x dim
@@ -333,16 +334,16 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
 
                 # feature distances
                 leaf = leaves[b,t]
-                old_phi = old_world.phi[leaf,:]
-                new_phi = new_world.phi[leaf,:]
+                old_phi = old_env.phi[leaf,:]
+                new_phi = new_env.phi[leaf,:]
                 feature_angle  = 1 - abs(new_phi @ old_phi.T / np.sqrt(new_phi @ new_phi.T)
                                      / np.sqrt(old_phi @ old_phi.T))
                 feature_euclid = np.sqrt((new_phi-old_phi) @ (new_phi-old_phi).T)
                 feature_manhattan = np.sum(np.abs(new_phi-old_phi))
 
                 # maximal value difference
-                max_value_diff = np.max([np.max(np.abs(new_world.phi @ new_w[t % M].T
-                                                       - old_world.phi @ w.T))
+                max_value_diff = np.max([np.max(np.abs(new_env.phi @ new_w[t % M].T
+                                                       - old_env.phi @ w.T))
                                          for w in old_w])
 
                 row = {
@@ -368,7 +369,7 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                     "mean_block_regret": mean_block_regret,
                     "mean_block_correct": mean_block_correct,
                 }
-                df = pd.concat([df, pd.DataFrame(row, columns=df.columns, index=[b, t, algo])])
+                df = pd.concat([df, pd.DataFrame(row, index=[b, t, algo])])
 
     # TODO check if df looks ok
     #print(df.head())
@@ -387,9 +388,11 @@ def simulate_and_save(subject_id="all"):
     df_subjects = pd.DataFrame()
 
     if subject_id == "all":
-        subject_id = range(n_subjects)
+        subject_list = range(n_subjects)
+    else:
+        subject_list = [subject_id]
 
-    for subject in subject_id:
+    for subject in subject_list:
         print(f"Subject {subject}")
         blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
             B, T, M, p_task_change, p_feature_change, p_transition_change)
@@ -417,7 +420,7 @@ def simulate_and_save(subject_id="all"):
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         # run for a specific subject
-        subject_id = [int(sys.argv[1])]
+        subject_id = int(sys.argv[1])
         simulate_and_save(subject_id=subject_id)
     else:
         # run for all subjects

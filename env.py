@@ -51,6 +51,7 @@ class TwoStepEnv():
         Returns optimal reward and a vector of length n_states
         indicating which leaf nodes are optimal.
         """
+        # TODO change this to value iteration
         task = np.array(task)
         reward = np.zeros(nsims)
         leaves = np.zeros(nsims, dtype=np.int16)

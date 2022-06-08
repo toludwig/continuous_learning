@@ -49,7 +49,7 @@ class SFGPI():
         tid = self.tasks.index(task)
 
         # learn only from last transition
-        (s, a, s_next, phi) = self.replay_buffer_by_task[tid].last()
+        (s, a, s_next, phi_next) = self.replay_buffer_by_task[tid].last()
         sf = self.sf_by_task[tid]
 
         # TEST print successor features to see convergence
@@ -62,7 +62,7 @@ class SFGPI():
         a_next = np.argmax(np.squeeze(self.sf_by_task[tid][s_next,:,:]) @ task)
                            # XXX self.pi_by_task[tid][s_next,:])
         psi_next = sf[s_next, a_next, :].squeeze()
-        delta = phi + self.GAMMA * psi_next - psi
+        delta = phi_next + self.GAMMA * psi_next - psi
 
         sf[s,a,:] += self.LEARNING_RATE * delta
 
