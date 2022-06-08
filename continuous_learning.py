@@ -30,8 +30,8 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0.5         # probability of task change
-p_feature_change = 0      # probability of feature change
+p_task_change = 0         # probability of task change
+p_feature_change = 0.5    # probability of feature change
 p_transition_change = 0 # probability of transition change
 
 #########################

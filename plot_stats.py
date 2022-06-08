@@ -15,9 +15,9 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0       # probability of task change
+p_task_change = 0.5       # probability of task change
 p_feature_change = 0    # probability of feature change
-p_transition_change = 0.5 # probability of transition change
+p_transition_change = 0 # probability of transition change
 
 
 def plot_distance(df, metric="task_euclid", ymeasure="regret"):
@@ -97,7 +97,7 @@ def plot_changes(df, change="task", ymeasure="regret"):
     print(anova_table)
 
     plt.figure()
-    sb.barplot(x=f"{change}_change", y=ymeasure, hue="algo", data=df)
+    sb.barplot(x=f"{change}_change", y=ymeasure, hue="algo", hue_order=["uvfa", "sfgpi"], data=df)
     plt.title(f"{ymeasure} by {change} change")
     plt.xticks(ticks=[0,1], labels=["no", "yes"])
     plt.xlabel(f"{change} change")
@@ -184,7 +184,7 @@ def plot_possible_correct(df, change="task"):
     df = df.reset_index()
     df.columns = df.columns.get_level_values(0)
 
-    sb.lineplot(data=df, x="block", y="possible_correct", hue="algo", style=f"{change}_change")
+    sb.lineplot(data=df, x="block", y="possible_correct", hue="algo", style=f"{change}_change", hue_order=["uvfa", "sfgpi"])
     plt.show()
 
 
@@ -200,8 +200,8 @@ if __name__ == "__main__":
     #plot_distance(df, metric="task_euclid", ymeasure="correct")
     #plot_distance(df, metric="max_value_diff", ymeasure="correct")
 
-    #plot_changes(df, change="feature", ymeasure="correct")
+    plot_changes(df, change="task", ymeasure="correct")
 
-    plot_blocks(df, change="feature", ymeasure="correct") # "mean_block_regret")
+    #plot_blocks(df, change="task", ymeasure="correct") # "mean_block_regret")
 
     #plot_possible_correct(df, change="feature")
