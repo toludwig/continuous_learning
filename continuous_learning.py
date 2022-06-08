@@ -1,19 +1,12 @@
 import numpy as np
+import pandas as pd
 import torch
 import random
 import copy
-import os
+import sys
 # progress bar
 from time import sleep
 from tqdm import tqdm
-# plotting
-from matplotlib import pyplot as plt
-import seaborn as sb
-# stats
-import pandas as pd
-import scipy.stats as stats
-import statsmodels.api as sm
-from statsmodels.formula.api import ols
 
 
 # load environment and models
@@ -31,8 +24,8 @@ B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
 p_task_change = 0         # probability of task change
-p_feature_change = 0.5    # probability of feature change
-p_transition_change = 0 # probability of transition change
+p_feature_change = 0    # probability of feature change
+p_transition_change = 0.5 # probability of transition change
 
 #########################
 # exploration           #
@@ -117,13 +110,13 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
         if feature_change and b > 0:
             env = copy.deepcopy(env)
             # change feature of the leaves that are optimal wrt. the new task
-            env.swap_optimal_feature(optimal_leaves[b,0,:])
+            env.swap_optimal_feature(optimal_leaves[b-1,0,:])
 
         transition_change = random.random() < p_transition_change
         if transition_change and b > 0:
             env = copy.deepcopy(env)
             # change transition of the path that is optimal wrt. the new task
-            env.swap_transitions(optimal_leaves[b,0,:])
+            env.swap_transitions(optimal_leaves[b-1,0,:])
 
         world_of_block.append(env)
 
@@ -383,14 +376,21 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
     return df
 
 
-def simulate_subjects():
+def simulate_and_save(subject_id="all"):
     """
     A subject would see all of the blocks (n_blocks) in a row,
     applying both algorithms.
+    If subject_id == "all", simulate all subjects sequentially.
+    Otherwise, simulate a single subject (for use on a cluster in parallel).
+    Saves the resulting data frame in /sim/sim_N{N}_... if subject_id == "all"
+    or /sim/sim_subject{subject_id}_... otherwise.
     """
     df_subjects = pd.DataFrame()
 
-    for subject in range(n_subjects):
+    if subject_id == "all":
+        subject_id = range(n_subjects)
+
+    for subject in subject_id:
         print(f"Subject {subject}")
         blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
             B, T, M, p_task_change, p_feature_change, p_transition_change)
@@ -404,20 +404,24 @@ def simulate_subjects():
         df.insert(0, "subject", subject)
         df_subjects = pd.concat([df_subjects, df])
 
-    return df_subjects
+    if subject_id == "all":
+        prefix = f"N{n_subjects}"
+    else:
+        prefix = f"subject{subject_id}"
 
+    filename = f"./sim/sim_{prefix}_B{n_blocks}_T{block_size}_M{n_tasks_per_block}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv"
+
+    df.to_csv(filename, index=False)
 
 
 
 if __name__ == "__main__":
-    # run for many subjects
-    df = simulate_subjects()
-
-    filename = f"./sim/sim_N{n_subjects}_B{n_blocks}_T{block_size}_M{n_tasks_per_block}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv"
-
-    append_mode = False # if we want to extend an existing csv
-    if os.path.exists(filename) and append_mode:
-        df.to_csv(filename, header=False, index=False, mode="a")
+    if len(sys.argv) > 1:
+        # run for a specific subject
+        subject_id = [int(sys.argv[1])]
+        simulate_and_save(subject_id=subject_id)
     else:
-        df.to_csv(filename, index=False)
+        # run for all subjects
+        simulate_and_save()
+
 
