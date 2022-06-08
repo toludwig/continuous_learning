@@ -15,15 +15,16 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0.5       # probability of task change
-p_feature_change = 0.5    # probability of feature change
-p_transition_change = 0   # TODO implement
+p_task_change = 0       # probability of task change
+p_feature_change = 0    # probability of feature change
+p_transition_change = 0.5 # probability of transition change
 
 
 def plot_distance(df, metric="task_euclid", ymeasure="regret"):
     """
     Plot scatter of x = task/feature/value distance and y = ymeasure.
-    metric can be one of {task, feature} x {euclid, angle, manhattan} or max_value_diff.
+    metric can be one of {task, feature} x {euclid, angle, manhattan}
+    or max_value_diff.
     """
     # only 1st trial in block
     df = df[df["trial"] == 0]
@@ -75,6 +76,7 @@ def plot_distance(df, metric="task_euclid", ymeasure="regret"):
 def plot_changes(df, change="task", ymeasure="regret"):
     """
     Plot barplot with x=change and y=ymeasure.
+    change can be one of {task, feature, transition}.
     """
     # only 1st trial in block
     df = df[df["trial"] == 0]
@@ -105,7 +107,8 @@ def plot_changes(df, change="task", ymeasure="regret"):
 
 def plot_blocks(df, change="task", ymeasure="regret"):
     """
-    Plot the 1st trial over blocks as lines with y=ymeasure and split by change.
+    Plot 1st trial over blocks as lines with y=ymeasure and split by change.
+    change can be one of {task, feature, transition}.
     """
     # only 1st trial in block
     df = df[df["trial"] == 0]
@@ -132,8 +135,9 @@ def plot_blocks(df, change="task", ymeasure="regret"):
 
 def plot_first_n_trials(df, offset=0, change="task", ymeasure="regret"):
     """
-    Plot the first n occurrences of the m-th task (m = offset), # TODO param for n?
+    Plot first n occurrences of the m-th task (m = offset), # TODO param for n?
     as lines of with y=ymeasure and split by change.
+    change can be one of {task, feature, transition}.
     """
     df = df.groupby(["algo", f"{change}_change", "trial", "task"]).agg(
         {ymeasure: ["mean"]})
@@ -153,6 +157,7 @@ def filter_for_one_change(df, change="task", history=0):
     """
     Filter such that only one kind of change happens, and the other not.
     History is an integer determining how many steps in the past to filter.
+    change can be one of {task, feature, transition}.
     """
     change_not = "feature" if change == "task" else "task"
     for h in range(history+1):
@@ -168,6 +173,9 @@ def filter_for_one_change(df, change="task", history=0):
 
 
 def plot_possible_correct(df, change="task"):
+    """
+    Lineplot over blocks (1st trials) of how many correct leaves there are.
+    """
     # only 1st trial in block
     df = df[df["trial"] == 0]
 
@@ -182,7 +190,7 @@ def plot_possible_correct(df, change="task"):
 
 if __name__ == "__main__":
     # load
-    df = pd.read_csv(f"./sim/sim_N{N}_B{B}_T{T}_M{M}_ptask{p_task_change}_pfeature{p_feature_change}.csv")
+    df = pd.read_csv(f"./sim/sim_N{N}_B{B}_T{T}_M{M}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv")
 
     # TODO filter only first 50 blocks
     #df = df[df["block"] < 50]
@@ -192,8 +200,8 @@ if __name__ == "__main__":
     #plot_distance(df, metric="task_euclid", ymeasure="correct")
     #plot_distance(df, metric="max_value_diff", ymeasure="correct")
 
-    plot_changes(df, change="task", ymeasure="correct")
+    #plot_changes(df, change="feature", ymeasure="correct")
 
-    #plot_blocks(df, change="feature", ymeasure="correct") # "mean_block_regret")
+    plot_blocks(df, change="feature", ymeasure="correct") # "mean_block_regret")
 
     #plot_possible_correct(df, change="feature")

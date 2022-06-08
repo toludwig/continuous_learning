@@ -7,6 +7,18 @@ Here, tasks are defined as different weightings $w$ of the features $\phi$
 of the environment.
 Both together form the reward for a state $s$: $$r(s) = w^T \phi(s).$$
 
+Here, we use a block design to test the effect of changes in the task and the environment on the choices of the algorithms.
+This design consists of $B$ blocks with $T$ trials each.
+In each block $M$ tasks are learned concurrently, i.e. alternatingly, one per trial.
+From block to block, 3 different types of changes can happen:
+- tasks can change such that one of the old ones is droppped and a new one is introduced (tasks are drawn with replacement from vectors $w \in {-1,0,1}^3)$)
+- features of two final states can be swapped (where one of them corresponds to a path which is optimal wrt. the test task, i.e. that of the 1st trial)
+- transitions of two nodes on the first level of decision tree can be swapped (where one of them lies on a path that is optimal wrt. the test task)
+
+We are mainly interested in the actions of the algorithms in the first trial of a new block ("test" trial), i.e. how they react on the different types of changes.
+Another aspect of interest is how (quickly) they re-learn after a change.
+
+
 ## How is the code structured?
 
 `ènv.py` defines the environment with its features and transitions.
@@ -16,12 +28,7 @@ Here, we use a 2-step deterministic environment like in [Tomov & Schulz, 2021](h
 
 `sfgpi.py` is an implementation of SFGPI which learns successor features for each task and combines them to find policies for unseen tasks.
 
-`continuous_learning.py` runs the simulation of both algorithms on our block paradigm.
-This consists of $B$ blocks with $T$ trials each.
-In each block $M$ tasks are learned concurrently, i.e. alternatingly.
-From block to block, tasks can change (such that one of the old ones is droppped and a new one is introduced),
-__or__ the features of the environment can change themselves (such that the features of two final nodes are swapped).
-We are mainly interested in the actions of the algorithms in the first trial of a new block, which might have a new task and new features.
+`continuous_learning.py` runs the simulation of both algorithms on our block paradigm with $N$ repetitions / "subjects" and outputs .csv files in `/sim`.
 
 `plot_raw.py` generates plots of the raw outputs of the algorithms,
 i.e. their chosen actions and the corresponding regret, over the whole block.

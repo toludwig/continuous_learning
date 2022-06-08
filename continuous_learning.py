@@ -30,9 +30,9 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0       # probability of task change
-p_feature_change =      # probability of feature change
-p_transition_change = 0.5   # TODO implement
+p_task_change = 0.5         # probability of task change
+p_feature_change = 0      # probability of feature change
+p_transition_change = 0 # probability of transition change
 
 #########################
 # exploration           #
@@ -83,12 +83,13 @@ TASKS = [[1,0,0],  [0,1,0],  [0,0,1],  [1,1,0],  [1,0,1], [0,1,1],  [1,1,1],
 
 
 def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
-                         p_task_change, p_feature_change):
+                         p_task_change, p_feature_change, p_transition_change):
     """
-    Inits a blocked experiment in which both tasks and features can change.
-    p_*_change are the respective probabilities of task and feature changes.
+    Inits an experiment in which tasks, features and transitions can change
+    stochastically, p_*_change are the probabilities of the respective changes.
     Returns a list of blocks, i.e. (tasks, world) tuples,
     as well as the optimal rewards and leaves for each.
+    changes is a boolean tuple of booleans indicating what changed.
     """
     blocks = [] # list of tuples, each of which of the form (tasks, world)
     tasks_of_block = []
@@ -114,10 +115,16 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
 
         feature_change = random.random() < p_feature_change # sample Bernoulli
         if feature_change and b > 0:
-            env = copy.deepcopy(env) # important!
-            # XXX for which task to change the optimal leaf's feature?
-            # take the newest task from the old block (position 0 in block b-1)
-            env.swap_optimal_feature(optimal_leaves[b-1,0,:])
+            env = copy.deepcopy(env)
+            # change feature of the leaves that are optimal wrt. the new task
+            env.swap_optimal_feature(optimal_leaves[b,0,:])
+
+        transition_change = random.random() < p_transition_change
+        if transition_change and b > 0:
+            env = copy.deepcopy(env)
+            # change transition of the path that is optimal wrt. the new task
+            env.swap_transitions(optimal_leaves[b,0,:])
+
         world_of_block.append(env)
 
         for t, w in enumerate(w_old):
@@ -126,7 +133,7 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
             optimal_leaves[b,t,:] = y
 
         # store changes
-        changes.append((task_change, feature_change))
+        changes.append((task_change, feature_change, transition_change))
 
     blocks = list(zip(tasks_of_block, world_of_block))
     return (blocks, optimal_reward, optimal_leaves, changes)
@@ -302,7 +309,8 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                                "task_euclid", "task_manhattan",
                                "feature_change", "feature_angle",
                                "feature_euclid", "feature_manhattan",
-                               "max_value_diff", "possible_correct",
+                               "max_value_diff", "transition_change",
+                               "possible_correct",
                                "mean_block_regret", "mean_block_correct"])
     # here we look only at the first trial of a task in a block
     for algo, leaves, regret in zip(["uvfa", "sfgpi"],
@@ -318,13 +326,11 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
             old_w = np.array(old_tasks) # n_task_per_block x dim
 
             # changes?
-            task_change, feature_change = changes[b-1]
+            task_change, feature_change, transition_change = changes[b]
 
             # mean performance over whole block
             mean_block_regret = np.mean(regret[b,:])
             mean_block_correct = np.mean(regret[b,:] == 0)
-
-            M = n_tasks_per_block # TODO !!!
 
             # distances are trial specific
             for t in range(n_trials):
@@ -364,6 +370,7 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                     "feature_angle":  feature_angle,
                     "feature_euclid": feature_euclid,
                     "feature_manhattan": feature_manhattan,
+                    "transition_change": transition_change,
                     "max_value_diff": max_value_diff,
                     "possible_correct": np.sum(optimal_leaves[b,t % M,:]),
                     "mean_block_regret": mean_block_regret,
@@ -386,7 +393,7 @@ def simulate_subjects():
     for subject in range(n_subjects):
         print(f"Subject {subject}")
         blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
-            B, T, M, p_task_change, p_feature_change)
+            B, T, M, p_task_change, p_feature_change, p_transition_change)
         uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
         sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
 
@@ -406,7 +413,7 @@ if __name__ == "__main__":
     # run for many subjects
     df = simulate_subjects()
 
-    filename = f"./sim/sim_N{n_subjects}_B{n_blocks}_T{block_size}_M{n_tasks_per_block}_ptask{p_task_change}_pfeature{p_feature_change}.csv"
+    filename = f"./sim/sim_N{n_subjects}_B{n_blocks}_T{block_size}_M{n_tasks_per_block}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv"
 
     append_mode = False # if we want to extend an existing csv
     if os.path.exists(filename) and append_mode:

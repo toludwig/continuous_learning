@@ -1,5 +1,4 @@
 import numpy as np
-import copy
 import random
 
 # define simple two-step decision process like in Tomov & Schulz 2021
@@ -117,10 +116,10 @@ class TwoStepEnv():
         suboptimal = set(leaves) - set(optimal)
 
         for leaf in optimal:
-            if suboptimal == set(): # HACK if empty, this should not happen!
+            if suboptimal == set(): # if empty (this should not happen!)
                 suboptimal = set(leaves) # but if if does, pick from all
             index = random.choices(list(suboptimal))
-            tmp = copy.copy(self.phi[leaf,:])
+            tmp = self.phi[leaf,:].copy()
             self.phi[leaf,:] = self.phi[index,:]
             self.phi[index,:] = tmp
             # remove index from suboptimal, so we don't swap the same twice
@@ -134,8 +133,10 @@ class TwoStepEnv():
         """
         optimal_leaf = np.nonzero(optimal_leaves)[0][0] # pick the 1st optimal
         optimal_s = (optimal_leaf-1) // self.n_actions # parent of optimal leaf
-        other_s = set([1,2,3]) - set([optimal_parent])
+        other_s = list(set([1,2,3]) - set([optimal_s]))
         other_s = np.random.choice(other_s)
 
+        # swap transitions from root node (=0) to first layer
+        tmp = self.P[0, :, optimal_s].copy()
         self.P[0, :, optimal_s] = self.P[0, :, other_s]
-        self.P[0, :, other_s] = self.P[0, :, optimal_s]
+        self.P[0, :, other_s] = tmp
