@@ -15,8 +15,8 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0.5       # probability of task change
-p_feature_change = 0    # probability of feature change
+p_task_change = 0         # probability of task change
+p_feature_change = 0.5    # probability of feature change
 p_transition_change = 0 # probability of transition change
 
 
@@ -192,16 +192,19 @@ if __name__ == "__main__":
     # load
     df = pd.read_csv(f"./sim/sim_N{N}_B{B}_T{T}_M{M}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv")
 
+    change = "feature"
+    ymeasure = "correct"
+
     # TODO filter only first 50 blocks
     #df = df[df["block"] < 50]
 
-    #plot_first_n_trials(df, offset=0, change="feature", ymeasure="correct")
+    plot_first_n_trials(df, offset=0, change=change, ymeasure=ymeasure)
 
-    #plot_distance(df, metric="task_euclid", ymeasure="correct")
-    #plot_distance(df, metric="max_value_diff", ymeasure="correct")
+    #plot_distance(df, metric="task_euclid", ymeasure=ymeasure)
+    #plot_distance(df, metric="max_value_diff", ymeasure=ymeasure)
 
-    plot_changes(df, change="task", ymeasure="correct")
+    #plot_changes(df, change=change, ymeasure=ymeasure)
 
-    #plot_blocks(df, change="task", ymeasure="correct") # "mean_block_regret")
+    #plot_blocks(df, change=change, ymeasure=ymeasure) # "mean_block_regret")
 
-    #plot_possible_correct(df, change="feature")
+    #plot_possible_correct(df, change=change)

@@ -8,7 +8,6 @@ import sys
 from time import sleep
 from tqdm import tqdm
 
-
 # load environment and models
 from env import TwoStepEnv
 from uvfa import UVFA
