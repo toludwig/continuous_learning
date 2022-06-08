@@ -11,9 +11,9 @@ Here, we use a block design to test the effect of changes in the task and the en
 This design consists of $B$ blocks with $T$ trials each.
 In each block $M$ tasks are learned concurrently, i.e. alternatingly, one per trial.
 From block to block, 3 different types of changes can happen stochastically:
-- *tasks* can change such that one of the old ones is droppped and a new one is introduced (tasks are drawn with replacement from vectors $w \in \{-1,0,1}\^3)$)
-- *features* of two final states can be swapped (where one of them corresponds to a path which is optimal wrt. the test task, i.e. that of the 1st trial)
-- *transitions* of two nodes on the first level of decision tree can be swapped (where one of them lies on a path that is optimal wrt. the test task)
+- *tasks* can change such that one of the old ones is droppped and a new one is introduced (tasks are drawn with replacement from vectors $w \in \{-1,0,1\}^3$)
+- *features* of two final states can be swapped (where one of them corresponds to a path which is optimal w.r.t. the test task, i.e. that of the 1st trial)
+- *transitions* of two nodes on the first level of decision tree can be swapped (where one of them lies on a path that is optimal w.r.t. the test task)
 
 We are mainly interested in the actions of the algorithms in the first trial of a new block ("test" trial), i.e. how they react on the different types of changes.
 Another aspect of interest is how (quickly) they re-learn after a change.

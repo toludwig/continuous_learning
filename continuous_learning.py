@@ -6,14 +6,8 @@ import os
 # progress bar
 from time import sleep
 from tqdm import tqdm
-# plotting
-from matplotlib import pyplot as plt
-import seaborn as sb
 # stats
 import pandas as pd
-import scipy.stats as stats
-import statsmodels.api as sm
-from statsmodels.formula.api import ols
 
 
 # load environment and models
