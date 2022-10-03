@@ -15,9 +15,10 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0         # probability of task change
-p_feature_change = 0.5    # probability of feature change
-p_transition_change = 0 # probability of transition change
+p_task_change = 0.5       # probability of task change
+p_feature_change = 0      # probability of feature change
+p_transition_change = 0   # probability of transition change
+tags = "_her_resetbuffer" # "_firstlast" # 
 
 
 def plot_distance(df, metric="task_euclid", ymeasure="regret"):
@@ -73,7 +74,35 @@ def plot_distance(df, metric="task_euclid", ymeasure="regret"):
     plt.show()
 
 
-def plot_changes(df, change="task", ymeasure="regret"):
+def plot_distance_bins(df, nbins=10, metric="task_euclid", ymeasure="correct"):
+    """
+    Bin metric, pooling across both subjects and blocks,
+    and compute uncertainty about ymeasure within these bins.
+    """
+    x = df[metric]
+    bin_edges = np.linspace(np.floor(np.min(x)), np.ceil(np.max(x)), num=nbins)
+    df["bin"] = np.digitize(x, bin_edges)
+    print(min(df["bin"]))
+    df = df.groupby(by=["algo", "bin"]).agg({ymeasure: ["mean", "std"]})
+    df = df.reset_index()
+    df_uvfa = df[df["algo"] == "uvfa"]
+    df_sfgpi = df[df["algo"] == "sfgpi"]
+    df_uvfa["ci95_lo"] = df_uvfa[(ymeasure, "mean")] - 1.96 * df_uvfa[(ymeasure, "std")] / np.sqrt(len(df_uvfa))
+    df_uvfa["ci95_hi"] = df_uvfa[(ymeasure, "mean")] + 1.96 * df_uvfa[(ymeasure, "std")] / np.sqrt(len(df_uvfa))
+    df_sfgpi["ci95_lo"] = df_sfgpi[(ymeasure, "mean")] - 1.96 * df_sfgpi[(ymeasure, "std")] / np.sqrt(len(df_sfgpi))
+    df_sfgpi["ci95_hi"] = df_sfgpi[(ymeasure, "mean")] + 1.96 * df_sfgpi[(ymeasure, "std")] / np.sqrt(len(df_sfgpi))
+
+    plt.figure()
+    p = sb.lineplot(data=df, x="bin", y=(ymeasure, "mean"), hue="algo", hue_order=["uvfa","sfgpi"])
+    plt.fill_between(data=df_uvfa, x="bin", y1="ci95_lo", y2="ci95_hi", color="blue", alpha=.5)
+    plt.fill_between(data=df_sfgpi, x="bin", y1="ci95_lo", y2="ci95_hi", color="orange", alpha=.5)
+    plt.xlabel(metric)
+    plt.xticks(ticks=range(1, nbins+1), labels=np.round(bin_edges, 1))
+    plt.ylabel(ymeasure)
+    plt.show()
+
+
+def plot_first_trial(df, change="task", ymeasure="regret"):
     """
     Plot barplot with x=change and y=ymeasure.
     change can be one of {task, feature, transition}.
@@ -86,7 +115,7 @@ def plot_changes(df, change="task", ymeasure="regret"):
 
     # mean over blocks for continous ymeasure
     df = df.groupby(by=["subject", "algo", f"{change}_change"]).agg(
-        {ymeasure: "mean", f"{ymeasure}": "mean"})
+        {ymeasure: "mean"})
     df = df.reset_index()
     df.columns = df.columns.get_level_values(0)
 
@@ -97,10 +126,48 @@ def plot_changes(df, change="task", ymeasure="regret"):
     print(anova_table)
 
     plt.figure()
-    sb.barplot(x=f"{change}_change", y=ymeasure, hue="algo", hue_order=["uvfa", "sfgpi"], data=df)
+    sb.barplot(x=f"{change}_change", y=ymeasure, hue="algo",# hue_order=["uvfa", "sfgpi"],
+               data=df)
+    if ymeasure == "correct":
+        plt.axhline(y=1/9, linestyle="dotted", color="k") # chance level
     plt.title(f"{ymeasure} by {change} change")
     plt.xticks(ticks=[0,1], labels=["no", "yes"])
     plt.xlabel(f"{change} change")
+    plt.ylabel(ymeasure)
+    plt.show()
+
+
+def plot_first_and_last_trial(df, change="task", ymeasure="regret"):
+    """
+    Compare the performance of the first trial of a new block to the last trial of the old.
+    Plot bars for both trials but only in the case of a change.
+    TODO check that the last and first trial have the same task
+    """
+    # only first and last trial in block
+    df = df[(df["trial"] == 0) | (df["trial"] == T-1)]
+
+    # copy the last trial of the previous block to the "-1"th trial of the current block
+    last = df[df["trial"] == T-1]
+    last["block"] = last["block"] + 1
+    last.at[:,"trial"] = -1
+    first = df[df["trial"] == 0]
+    df = pd.concat([last, first])
+
+    # only those with a change OR "-1" trials
+    df = df[(df[f"{change}_change"]) | (df["trial"] == -1)]
+
+    # mean over subjects for continuous ymeasure
+    df = df.groupby(by=["block", "algo", "trial"]).agg({ymeasure: "mean"})
+    df = df.reset_index()
+    df.columns = df.columns.get_level_values(0)
+
+    plt.figure()
+    sb.barplot(x="trial", y=ymeasure, hue="algo", hue_order=["uvfa", "sfgpi"], data=df)
+    if ymeasure == "correct":
+        plt.axhline(y=1/9, linestyle="dotted", color="k") # chance level
+    plt.title(f"{ymeasure} by first and last trial")
+    #plt.xticks(ticks=[-1,0], labels=["last", "first"])
+    plt.xlabel("trial")
     plt.ylabel(ymeasure)
     plt.show()
 
@@ -116,13 +183,13 @@ def plot_blocks(df, change="task", ymeasure="regret"):
     # XXX exclude cases where both task and features change
     df = df[np.logical_not(np.logical_and(df["task_change"], df["feature_change"]))]
 
-    # mean over subjects for continous ymeasure
+    # mean over subjects for continuous ymeasure
     df = df.groupby(by=["block", "algo", f"{change}_change"]).agg(
-        {ymeasure: "mean", f"{ymeasure}": "mean"})
+        {ymeasure: "mean"})
     df = df.reset_index()
     df.columns = df.columns.get_level_values(0)
 
-    model = ols(f"{ymeasure} ~ block + block:C(algo)", df).fit()
+    model = ols(f"{ymeasure} ~ block + C(algo) + block:C(algo)", df).fit()
     print(model.params)
     anova_table = sm.stats.anova_lm(model, typ=2)
     print(anova_table)
@@ -130,6 +197,8 @@ def plot_blocks(df, change="task", ymeasure="regret"):
     plt.figure()
     sb.lineplot(data=df, x="block", y=ymeasure, hue="algo", style=f"{change}_change",
                 hue_order=["uvfa", "sfgpi"])
+    if ymeasure == "correct":
+        plt.axhline(y=1/9, linestyle="dotted", color="k") # chance level
     plt.show()
 
 
@@ -147,6 +216,8 @@ def plot_first_n_trials(df, offset=0, change="task", ymeasure="regret"):
     plt.figure()
     sb.lineplot(data=df[df["task"] == offset], x="trial", y=f"{ymeasure}",
                 hue="algo", style=f"{change}_change", hue_order=["uvfa", "sfgpi"])
+    if ymeasure == "correct":
+        plt.axhline(y=1/9, linestyle="dotted", color="k") # chance level
     plt.title(f"{ymeasure} by {change} change")
     plt.xlabel("trial")
     plt.ylabel(ymeasure)
@@ -159,7 +230,7 @@ def filter_for_one_change(df, change="task", history=0):
     History is an integer determining how many steps in the past to filter.
     change can be one of {task, feature, transition}.
     """
-    change_not = "feature" if change == "task" else "task"
+    change_not = "feature" if change == "task" else "task" # TODO also transition
     for h in range(history+1):
         df = df.loc[np.roll(df[f"{change_not}_change"] == False, h)]
 
@@ -190,21 +261,26 @@ def plot_possible_correct(df, change="task"):
 
 if __name__ == "__main__":
     # load
-    df = pd.read_csv(f"./sim/sim_N{N}_B{B}_T{T}_M{M}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv")
+    df = pd.read_csv(f"./sim/sim_N{N}_B{B}_T{T}_M{M}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}" + tags + ".csv")
 
-    change = "feature"
-    ymeasure = "correct"
+    change = "task" # "feature" #"transition" # 
+    ymeasure = "correct" # "k-best" # "regret"
 
     # TODO filter only first 50 blocks
     #df = df[df["block"] < 50]
 
+    #plot_blocks(df, change=change, ymeasure=ymeasure)
+    #plot_blocks(df, change=change, ymeasure="mean_block_regret")
+
+    plot_first_trial(df, change=change, ymeasure=ymeasure)
     #plot_first_n_trials(df, offset=0, change=change, ymeasure=ymeasure)
+    #plot_first_and_last_trial(df, change=change, ymeasure=ymeasure)
 
     #plot_distance(df, metric="task_euclid", ymeasure=ymeasure)
+    #plot_distance(df, metric="feature_angle", ymeasure=ymeasure)
     #plot_distance(df, metric="max_value_diff", ymeasure=ymeasure)
 
-    plot_changes(df, change=change, ymeasure=ymeasure)
-
-    plot_blocks(df, change=change, ymeasure=ymeasure) # "mean_block_regret")
+    #plot_distance_bins(df, metric="task_euclid", ymeasure=ymeasure)
+    #plot_distance_bins(df, metric="max_value_diff", ymeasure=ymeasure)
 
     #plot_possible_correct(df, change=change)

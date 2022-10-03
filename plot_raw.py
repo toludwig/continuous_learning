@@ -7,7 +7,8 @@ such that individual algorithm behaviour becomes clear.
 import numpy as np
 from matplotlib import pyplot as plt
 from continuous_learning import init_blocks_randomly, run_uvfa, run_sfgpi
-from env import TwoStepEnv
+from two_step_env import TwoStepEnv
+# TODO from shopping import epsilon_greedy
 
 #########################
 # SIMULATION-PARAMETERS #
@@ -19,7 +20,7 @@ B = n_blocks = 6          # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
 p_task_change = 0.5       # probability of task change
-p_feature_change = 0.5    # probability of feature change
+p_feature_change = 0      # probability of feature change
 p_transition_change = 0   # TODO implement
 
 
@@ -162,13 +163,16 @@ def plot_epsilon():
 
 if __name__ == "__main__":
 
-    blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
-        B, T, M, p_task_change, p_feature_change, p_transition_change)
-    uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
-    sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
+    #blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
+    #    B, T, M, p_task_change, p_feature_change, p_transition_change)
+    #uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
+    #sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
+    #sfgpi_her_regret, sfgpi_her_leaves = run_sfgpi(blocks, optimal_reward, her=True, verbose=False)
 
-    block_idx = slice(0,6) # NB this has to be a slice
-    plot_regret(block_idx, uvfa_regret, sfgpi_regret, blocks, optimal_leaves, single_tasks=True)
-    plot_leaves(block_idx, uvfa_regret, uvfa_leaves, sfgpi_regret, sfgpi_leaves, optimal_leaves)
+    #block_idx = slice(0,6) # NB this has to be a slice
+    # plot_regret(block_idx, uvfa_regret, sfgpi_regret, blocks, optimal_leaves, single_tasks=True)
+    # plot_leaves(block_idx, uvfa_regret, uvfa_leaves, sfgpi_regret, sfgpi_leaves, optimal_leaves)
+    #plot_regret(block_idx, sfgpi_her_regret, sfgpi_regret, blocks, optimal_leaves, single_tasks=True)
+    #plot_leaves(block_idx, sfgpi_her_regret, sfgpi_her_leaves, sfgpi_regret, sfgpi_leaves, optimal_leaves)
 
-    #plot_epsilon()
+    plot_epsilon()

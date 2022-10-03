@@ -9,7 +9,7 @@ from time import sleep
 from tqdm import tqdm
 
 # load environment and models
-from env import TwoStepEnv
+from two_step_env import TwoStepEnv
 from uvfa import UVFA
 from sfgpi import SFGPI
 
@@ -22,9 +22,10 @@ N = n_subjects = 100      # repetitions of simulation to average over
 B = n_blocks = 50         # number of blocks
 T = block_size = 100      # number of trials in a block
 M = n_tasks_per_block = 2 # number of unique tasks per block ("multi-tasking")
-p_task_change = 0         # probability of task change
-p_feature_change = 0.5    # probability of feature change
+p_task_change = 0.5       # probability of task change
+p_feature_change = 0      # probability of feature change
 p_transition_change = 0   # probability of transition change
+tags = "_her_resetbuffer"     # other settings
 
 #########################
 # exploration           #
@@ -55,11 +56,12 @@ def epsilon_greedy(Q, block, trial):
 # model hyperparams     #
 #########################
 # note: I haven't really optimised these, learning rates might not be balanced.
-LEARNING_RATE_UVFA = 2
+LEARNING_RATE_UVFA = .75
 LEARNING_RATE_SFGPI = .75
 GAMMA = .99           # discounting for TD
 BUFFER_CAPACITY = 250 # how many transitions can be stored for offline learning
 BATCH_SIZE = 50       # from how many transitions to learn at a time (UVFA only)
+RESET_BUFFER = True   # whether to empty the buffer at the beginning of a block
 
 #########################
 # Possible tasks        #
@@ -81,7 +83,7 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
     stochastically, p_*_change are the probabilities of the respective changes.
     Returns a list of blocks, i.e. (tasks, env) tuples,
     as well as the optimal rewards and leaves for each.
-    changes is a boolean tuple of booleans indicating what changed.
+    changes is a tuple of booleans indicating what changed.
     """
     blocks = [] # list of tuples, each of which of the form (tasks, env)
     tasks_of_block = []
@@ -131,10 +133,17 @@ def init_blocks_randomly(n_blocks, block_size, n_tasks_per_block,
     return (blocks, optimal_reward, optimal_leaves, changes)
 
 
-def init_blocks_smartly():
+def init_blocks_favoring_UVFA():
     """
-    Design a curriculum of tasks somehow,
-    e.g. such that tasks are maximally diverse in a block.
+    Design a curriculum favoring UVFA. This means:
+    Task changes are maximal while not changing the policy.
+    """
+    pass
+
+def init_blocks_favoring_SFGPI():
+    """
+    Design a curriculum favoring SFGPI. This means:
+    Task changes are minimal while still changing the policy.
     """
     pass
 
@@ -159,7 +168,9 @@ def run_uvfa(blocks, optimal_reward, verbose=True):
 
         if verbose:
             print("Tasks of this block: {}".format(tasks))
-            #print("phi-6 of this block: {}".format(env.phi[5,:]))
+
+        if RESET_BUFFER:
+            uvfa.replay_buffer.memory.clear() # empty at the beginning of a block
 
         for trial in range(block_size):
             w = tasks[trial % n_tasks_per_block] # alternate tasks
@@ -203,7 +214,7 @@ def run_uvfa(blocks, optimal_reward, verbose=True):
     return (uvfa_regret, uvfa_leaves)
 
 
-def run_sfgpi(blocks, optimal_reward, verbose=True):
+def run_sfgpi(blocks, optimal_reward, her=False, verbose=True):
     """
     Run SFGPI algorithm, which uses libraries of successor features for each task
     to compute the best policy for an unseen task by general. policy improvement.
@@ -224,6 +235,9 @@ def run_sfgpi(blocks, optimal_reward, verbose=True):
         if verbose:
             print("Tasks of this block: {}".format(tasks))
             #print("phi-6 of this block: {}".format(env.phi[5,:]))
+
+        if RESET_BUFFER:
+            sfgpi.reset_all_buffers() # empty at the beginning of a block
 
         for trial in range(block_size):
             w = tasks[trial % n_tasks_per_block] # alternate tasks
@@ -253,8 +267,8 @@ def run_sfgpi(blocks, optimal_reward, verbose=True):
                 sfgpi.store_transition(w, s, a, s_next, phi_next)
                 s = s_next
 
-                # train online (last transition only)
-                sfgpi.train_online(w)
+                # train online (only this one transition)
+                sfgpi.train_online(w, her=her)
 
             # update the neural network after each trial
             #sfgpi.train_offline(w, trial)
@@ -289,20 +303,30 @@ def _in_span(wall, wold):
     # 0 if wnew in span(wold), else 1
     return np.linalg.matrix_rank(wall) - np.linalg.matrix_rank(wold)
 
-
-def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
-                         sfgpi_regret, sfgpi_leaves, optimal_leaves):
+def _rank(x, xs):
     """
-    Make a dataframe with the first n trials (n_trials) of each block.
+    Returns the rank of x in a list of xs.
+    Disregards duplicates in xs, such that the lowest possible rank is returned.
+    """
+    xs = np.sort(np.unique(xs))
+    return np.nonzero(x == xs)[0]
+
+
+def collect_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
+                   sfgpi_regret, sfgpi_leaves, optimal_leaves):
+    """
+    Make a dataframe with the first + last trials (n_trials on either side) of each block.
     """
     df = pd.DataFrame()
+    idx = 0 # only for enumerating rows
 
-    for algo, leaves, regret in zip(["uvfa", "sfgpi"],
+    for algo, leaves, regret in zip(["sfgpi_her", "sfgpi"], #["uvfa", "sfgpi"],
                                     [uvfa_leaves, sfgpi_leaves],
                                     [uvfa_regret, sfgpi_regret]):
         leaves = np.reshape(leaves, (n_blocks, block_size))
         regret = np.reshape(regret, (n_blocks, block_size))
-        for b in range(1, n_blocks): # skip first block
+
+        for b in range(1, n_blocks): # skip b=0 (changes not meaningful in first block)
             old_tasks, old_env = blocks[b-1]
             new_tasks, new_env = blocks[b]
 
@@ -317,7 +341,9 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
             mean_block_correct = np.mean(regret[b,:] == 0)
 
             # distances are trial specific
-            for t in range(n_trials):
+            # save first n_trials plus last n_trials in each block
+            trials_to_save = list(range(n_trials)) + list(range(block_size - n_trials, block_size))
+            for t in trials_to_save:
                 # task distances
                 task_angle = _min_distance(old_w, new_w[t % M], metric="angle")
                 task_euclid = _min_distance(old_w, new_w[t % M], metric="euclid")
@@ -344,6 +370,7 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                     "task":           t % M,
                     "leaf":           leaves[b,t],
                     "regret":         regret[b,t],
+                    #"k-best":         _rank(regret[b,t], all_regrets),
                     "correct":        regret[b,t] == 0,
                     "task_change":    task_change and t % M == 0,
                     "task_span":      _in_span(new_tasks, old_w),
@@ -360,7 +387,8 @@ def collect_first_trials(blocks, n_trials, changes, uvfa_regret, uvfa_leaves,
                     "mean_block_regret": mean_block_regret,
                     "mean_block_correct": mean_block_correct,
                 }
-                df = pd.concat([df, pd.DataFrame(row, index=[b, t, algo])])
+                df = pd.concat([df, pd.DataFrame(row, index=[idx])])
+                idx += 1 # only for enumerating rows
 
     # TODO check if df looks ok
     #print(df.head())
@@ -387,13 +415,15 @@ def simulate_and_save(subject_id="all"):
         print(f"Subject {subject}")
         blocks, optimal_reward, optimal_leaves, changes = init_blocks_randomly(
             B, T, M, p_task_change, p_feature_change, p_transition_change)
-        uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
+        #uvfa_regret,  uvfa_leaves  = run_uvfa(blocks,  optimal_reward, verbose=False)
         sfgpi_regret, sfgpi_leaves = run_sfgpi(blocks, optimal_reward, verbose=False)
+        sfgpi_her_regret, sfgpi_her_leaves = run_sfgpi(blocks, optimal_reward, her=True, verbose=False)
 
-        n_first_trials = 10
-        df = collect_first_trials(blocks, n_first_trials, changes,
-                                  uvfa_regret, uvfa_leaves,
-                                  sfgpi_regret, sfgpi_leaves, optimal_leaves)
+        n_trials = 10
+        df = collect_trials(blocks, n_trials, changes,
+                            #uvfa_regret, uvfa_leaves,
+                            sfgpi_her_regret, sfgpi_her_leaves,
+                            sfgpi_regret, sfgpi_leaves, optimal_leaves)
         df.insert(0, "subject", subject)
         df_subjects = pd.concat([df_subjects, df])
 
@@ -402,9 +432,9 @@ def simulate_and_save(subject_id="all"):
     else:
         prefix = f"subject{subject_id}"
 
-    filename = f"./sim/sim_{prefix}_B{n_blocks}_T{block_size}_M{n_tasks_per_block}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}.csv"
+    filename = f"./sim/sim_{prefix}_B{B}_T{T}_M{M}_ptask{p_task_change}_pfeature{p_feature_change}_ptransition{p_transition_change}" + tags + ".csv"
 
-    df.to_csv(filename, index=False)
+    df_subjects.to_csv(filename, index=False)
 
 
 
